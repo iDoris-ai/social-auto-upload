@@ -116,6 +116,22 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 - 如果本地没有 `biliup`，第一次运行会自动下载
 - 如果上游 GitHub Release 有更新，运行时会先自动更新
 - `sau bilibili login --account <name>` 建议由用户自己在本地真实终端里执行；如果终端里的二维码显示不完整，可直接打开当前目录下的 `qrcode.png` 扫码
+- `upload-video` 支持 `--json`：加了这个 flag，成功时只打印一行 `{"platform": "bilibili", "account": ..., "id": ..., "url": ...}`，不打印人类可读文案。`biliup` 目前没有结构化输出，`id`/`url` 是从它的 stdout/stderr 里扫 `BV` 号，扫不到就是空字符串（不是失败——大概率还是发出去了，只是这次没读到地址，得去账号后台确认）。给程序调用（比如别的服务想要发布后的真实链接）用这个，人读用不加 `--json` 的默认输出。
+
+## YouTube CLI 子命令
+
+```bash
+sau youtube login --account <account_name>
+sau youtube check --account <account_name>
+sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 教程,评测 --visibility private
+```
+
+补充说明：
+
+- 走浏览器自动化（YouTube Studio），不是官方 Data API——官方 API 项目没过审核会强制视频锁 private，没法直接发公开；浏览器路线没有这个限制
+- `--visibility` 支持 `public` / `unlisted` / `private`，默认 `public`
+- `sau youtube login --account <name>` 是交互式 Google 登录（没有二维码，浏览器会弹出让你手动输账号密码/二次验证），同样建议用户自己在本地真实终端执行
+- `upload-video` 同样支持 `--json`，成功时打印 `{"platform": "youtube", "account": ..., "id": ..., "url": ...}`；发布链接是从 YouTube Studio 发布完成页面上抓的，正常情况下能拿到，抓不到时 `id`/`url` 为空字符串，同样不代表上传失败
 
 ## 视频号 CLI 子命令
 

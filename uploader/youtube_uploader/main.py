@@ -197,7 +197,12 @@ class YouTubeVideo(BaseVideoUploader):
         self.debug = debug
         self.headless = headless
 
-    async def upload(self, playwright: Playwright) -> None:
+    async def upload(self, playwright: Playwright) -> str:
+        """Returns the published video's URL, or "" if it could not be read off the
+        page (e.g. the publish button never appeared). Callers that need the id for
+        anything downstream — writing it back into a CMS, linking a comment poller —
+        must treat "" as "unknown", not assume upload failure: the video can still
+        have gone out even when the confirmation UI didn't cooperate."""
         browser = await playwright.chromium.launch(
             headless=self.headless, channel="chrome",
             proxy={"server": YT_PROXY} if YT_PROXY else None,
@@ -306,11 +311,11 @@ class YouTubeVideo(BaseVideoUploader):
 
         # 11) 发布
         await page.wait_for_timeout(1200)
+        video_url = ""
         if not await _click_if_present(page, "#done-button", 15000):
             youtube_logger.warning(_msg("🤔", "未找到发布按钮，可能上传未到可发布进度；请在窗口里手动发布"))
         else:
             await page.wait_for_timeout(4000)
-            video_url = ""
             try:
                 link = page.locator("a[href*='youtu.be'], a[href*='watch?v=']").first
                 if await link.count():
@@ -327,7 +332,8 @@ class YouTubeVideo(BaseVideoUploader):
             pass
         await page.wait_for_timeout(2000)
         await browser.close()
+        return video_url
 
-    async def main(self):
+    async def main(self) -> str:
         async with async_playwright() as playwright:
-            await self.upload(playwright)
+            return await self.upload(playwright)

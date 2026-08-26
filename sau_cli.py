@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -282,6 +284,42 @@ def parse_tags(raw_tags: str | None) -> list[str]:
     return tags
 
 
+_YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\.be/)([\w-]{11})")
+
+
+def _video_id_from_url(platform: str, url: str) -> str:
+    """Best-effort id extraction for callers that want a short id alongside the
+    full url. Empty input or an unrecognised url shape yields "" rather than
+    raising — an unparsed id must never block reporting a url that IS known."""
+    if not url:
+        return ""
+    if platform == "bilibili":
+        match = _BVID_RE.search(url)
+    elif platform == "youtube":
+        match = _YOUTUBE_ID_RE.search(url)
+    else:
+        match = None
+    return match.group(1) if platform == "youtube" and match else (match.group(0) if match else "")
+
+
+def print_video_upload_result(platform: str, account: str, url: str, *, as_json: bool) -> None:
+    """Shared by bilibili/youtube upload-video dispatch. `url` == "" means the
+    video almost certainly went out but we could not read its address back —
+    see upload_bilibili_video / upload_youtube_video's docstrings for why that
+    happens and stays unresolved rather than guessed at."""
+    video_id = _video_id_from_url(platform, url)
+    if as_json:
+        print(json.dumps({"platform": platform, "account": account, "id": video_id, "url": url}))
+        return
+    if url:
+        print(f"{platform.capitalize()} video published: {url}")
+    else:
+        print(
+            f"{platform.capitalize()} video upload submitted, but the published url could not be read back "
+            f"— check the {platform} account manually to confirm and get the link."
+        )
+
+
 def parse_image_files(raw_files: Iterable[Path]) -> list[Path]:
     return [Path(file) for file in raw_files]
 
@@ -382,7 +420,10 @@ async def check_youtube_account(account_name: str) -> bool:
     return await youtube_cookie_auth(str(account_file))
 
 
-async def upload_youtube_video(request: YouTubeVideoUploadRequest) -> Path:
+async def upload_youtube_video(request: YouTubeVideoUploadRequest) -> str:
+    """Returns the published video's URL, or "" if the upload flow couldn't read
+    it off the confirmation page (see YouTubeVideo.upload's docstring — "" means
+    unknown, not failure)."""
     account_file = resolve_account_file("youtube", request.account_name)
     is_ready = await youtube_setup(str(account_file), handle=False)
     if not is_ready:
@@ -402,8 +443,7 @@ async def upload_youtube_video(request: YouTubeVideoUploadRequest) -> Path:
         debug=request.debug,
         headless=request.headless,
     )
-    await app.main()
-    return account_file
+    return await app.main()
 
 
 async def upload_video(request: DouyinVideoUploadRequest) -> Path:
@@ -559,7 +599,10 @@ async def upload_xiaohongshu_note(request: XiaohongshuNoteUploadRequest) -> Path
     return account_file
 
 
-async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
+async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> str:
+    """Returns the published video's bilibili URL, or "" if it could not be
+    scraped out of biliup's output (see `_extract_bvid_url` — unverified, "" means
+    unknown, not failure)."""
     account_file = resolve_account_file("bilibili", request.account_name)
     if not account_file.exists():
         raise RuntimeError(
@@ -588,7 +631,23 @@ async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
     result = run_biliup_command(arguments)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "").strip() or "Bilibili upload failed")
-    return account_file
+    return _extract_bvid_url(result.stdout, result.stderr)
+
+
+# biliup-cli 1.2.4's `upload` has no --json/structured-output flag (checked via
+# `biliup upload --help`), so the BV id — if biliup prints one at all on success —
+# has to be scraped from whatever it writes to stdout/stderr. This has NOT been
+# verified against a real upload (no bilibili account is logged in on this
+# machine yet — see `sau bilibili login`); callers must treat "" as "unknown,
+# needs a human to check", not as upload failure. Once a real login exists, run
+# one real upload and confirm this pattern actually matches biliup's output;
+# adjust it then rather than trusting this blind.
+_BVID_RE = re.compile(r"\bBV[0-9A-Za-z]{10}\b")
+
+
+def _extract_bvid_url(stdout: str, stderr: str) -> str:
+    match = _BVID_RE.search(stdout) or _BVID_RE.search(stderr)
+    return f"https://www.bilibili.com/video/{match.group(0)}/" if match else ""
 
 
 async def upload_tencent_video(request: TencentVideoUploadRequest) -> Path:
@@ -909,6 +968,7 @@ def build_parser() -> argparse.ArgumentParser:
     bilibili_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
     bilibili_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional Bilibili cover image path")
     bilibili_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+    bilibili_upload_video_parser.add_argument("--json", action="store_true", help="Print {platform, account, url} as JSON instead of a human-readable line")
 
     tencent_parser = platform_parsers.add_parser("tencent", help="Tencent/WeChat Channels operations")
     tencent_actions = tencent_parser.add_subparsers(dest="action", required=True)
@@ -1010,6 +1070,7 @@ def build_parser() -> argparse.ArgumentParser:
     youtube_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
     youtube_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional thumbnail image path")
     youtube_upload_video_parser.add_argument("--playlist", help="Optional playlist name to add the video to (for series)")
+    youtube_upload_video_parser.add_argument("--json", action="store_true", help="Print {platform, account, url} as JSON instead of a human-readable line")
     youtube_upload_video_parser.add_argument(
         "--visibility", default="public", choices=["public", "unlisted", "private"], help="Video visibility")
     add_runtime_flags(youtube_upload_video_parser)
@@ -1238,8 +1299,8 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_date=args.schedule or 0,
                 thumbnail_file=args.thumbnail,
             )
-            await upload_bilibili_video(request)
-            print(f"Bilibili video upload submitted: {request.video_file}")
+            url = await upload_bilibili_video(request)
+            print_video_upload_result("bilibili", args.account, url, as_json=args.json)
             return 0
 
         raise RuntimeError(f"Unsupported Bilibili action: {args.action}")
@@ -1402,8 +1463,8 @@ async def dispatch(args: argparse.Namespace) -> int:
                 debug=args.debug,
                 headless=args.headless,
             )
-            await upload_youtube_video(request)
-            print(f"YouTube video upload submitted: {request.video_file}")
+            url = await upload_youtube_video(request)
+            print_video_upload_result("youtube", args.account, url, as_json=args.json)
             return 0
 
         raise RuntimeError(f"Unsupported YouTube action: {args.action}")
