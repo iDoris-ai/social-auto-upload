@@ -172,6 +172,7 @@ class DispatchUploadVideoJsonTests(unittest.TestCase):
             tid=188,
             tags="",
             schedule=None,
+            thumbnail=None,
             json=True,
         )
         buf = io.StringIO()
@@ -226,6 +227,7 @@ class DispatchUploadVideoJsonTests(unittest.TestCase):
             tid=188,
             tags="",
             schedule=None,
+            thumbnail=None,
             json=True,
         )
         buf = io.StringIO()
